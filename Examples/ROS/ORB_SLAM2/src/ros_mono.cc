@@ -27,6 +27,12 @@
 #include<ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
 
+#include "geometry_msgs/TransformStamped.h"
+#include "../../../include/System.h"
+#include "tf/transform_datatypes.h"
+#include <tf/transform_broadcaster.h>
+#include <nav_msgs/Odometry.h>
+
 #include<opencv2/core/core.hpp>
 
 #include"../../../include/System.h"
@@ -41,6 +47,8 @@ public:
     void GrabImage(const sensor_msgs::ImageConstPtr& msg);
 
     ORB_SLAM2::System* mpSLAM;
+    ros::Publisher odom_pub;
+    tf::TransformBroadcaster br;
 };
 
 int main(int argc, char **argv)
@@ -62,6 +70,7 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nodeHandler;
     ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
+    igb.odom_pub = nodeHandler.advertise<nav_msgs::Odometry>("odom", 50);
 
     ros::spin();
 
@@ -78,6 +87,7 @@ int main(int argc, char **argv)
 
 void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
 {
+    ros::Time current_time = ros::Time::now();
     // Copy the ros image message to cv::Mat.
     cv_bridge::CvImageConstPtr cv_ptr;
     try
@@ -89,8 +99,66 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
         ROS_ERROR("cv_bridge exception: %s", e.what());
         return;
     }
+    
+    cv::Mat pose = mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
 
-    mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+    if (pose.empty())
+        return;
+
+    /* global left handed coordinate system */
+    static cv::Mat pose_prev = cv::Mat::eye(4,4, CV_32F);
+    static cv::Mat world_lh = cv::Mat::eye(4,4, CV_32F);
+    // matrix to flip signs of sinus in rotation matrix, not sure why we need to do that
+    static const cv::Mat flipSign = (cv::Mat_<float>(4,4) <<   1,-1,-1, 1,
+                                                               -1, 1,-1, 1,
+                                                               -1,-1, 1, 1,
+                                                                1, 1, 1, 1);
+
+    //prev_pose * T = pose
+    cv::Mat translation =  (pose * pose_prev.inv()).mul(flipSign);
+    world_lh = world_lh * translation;
+    pose_prev = pose.clone();
+
+
+    /* transform into global right handed coordinate system, publish in ROS*/
+    tf::Matrix3x3 cameraRotation_rh(  - world_lh.at<float>(0,0),   world_lh.at<float>(0,1),   world_lh.at<float>(0,2),
+                                  - world_lh.at<float>(1,0),   world_lh.at<float>(1,1),   world_lh.at<float>(1,2),
+                                    world_lh.at<float>(2,0), - world_lh.at<float>(2,1), - world_lh.at<float>(2,2));
+
+    tf::Vector3 cameraTranslation_rh( world_lh.at<float>(0,3),world_lh.at<float>(1,3), - world_lh.at<float>(2,3) );
+
+    //rotate 270deg about x and 270deg about x to get ENU: x forward, y left, z up
+    const tf::Matrix3x3 rotation270degXZ(   0, 1, 0,
+                                            0, 0, 1,
+                                            1, 0, 0);
+
+
+    tf::Matrix3x3 globalRotation_rh = cameraRotation_rh * rotation270degXZ;
+    tf::Vector3 globalTranslation_rh = cameraTranslation_rh * rotation270degXZ;
+    tf::Transform transform = tf::Transform(globalRotation_rh, globalTranslation_rh);
+    br.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "camera_link", "camera_pose"));
+
+    //publish odometry
+    nav_msgs::Odometry odom;
+    odom.header.stamp = current_time;
+    odom.header.frame_id = "odom";
+
+    geometry_msgs::Quaternion odom_quat = tf::createQuaternionMsgFromYaw(0);
+
+    //set the position
+    odom.pose.pose.position.x = globalTranslation_rh[0];
+    odom.pose.pose.position.y = globalTranslation_rh[1];
+    odom.pose.pose.position.z = globalTranslation_rh[2];
+    odom.pose.pose.orientation = odom_quat;
+
+    //set the velocity
+    odom.child_frame_id = "base_link";
+    odom.twist.twist.linear.x = 0;
+    odom.twist.twist.linear.y = 0;
+    odom.twist.twist.angular.z = 0;
+
+    //publish the message
+    odom_pub.publish(odom);
 }
 
 
