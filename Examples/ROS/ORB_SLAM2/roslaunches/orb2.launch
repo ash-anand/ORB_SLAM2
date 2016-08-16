@@ -1,0 +1,6 @@
+<launch>
+  <node name="orb" pkg="ORB_SLAM2" type="Mono" output="screen" args="/home/[your path]/ORB_SLAM2/Vocabulary/ORBvoc.txt /home/[your path]/ORB_SLAM2/Examples/Monocular/TUM1.yaml">
+    <remap from="/camera/image_raw" to="/erlecopter/front/image_front_raw"/>
+    <!--<remap from="/camera/image_raw" to="/camera/image_rect_color"/>-->
+  </node>
+</launch>
