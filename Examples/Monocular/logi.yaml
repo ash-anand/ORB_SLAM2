@@ -5,19 +5,19 @@
 #--------------------------------------------------------------------------------------------
 
 # Camera calibration and distortion parameters (OpenCV) 
-Camera.fx: 290.3225849224827
-Camera.fy: 290.550989443072
-Camera.cx: 327.2462411877981
-Camera.cy: 226.0006962149673
+Camera.fx: 282.7738977610766
+Camera.fy: 282.8195958516856
+Camera.cx: 160.2180012376748
+Camera.cy: 118.6404557363813
 
-Camera.k1: -0.3123386092506541
-Camera.k2: 0.06831734716000243
-Camera.p1: 0.001451836745243644
-Camera.p2: -0.002039819703761851
+Camera.k1: 0.06611265852495257
+Camera.k2: -0.2266076962948379
+Camera.p1: -0.00178255304366931
+Camera.p2: -0.007722607956799756
 Camera.k3: 0
 
 # Camera frames per second 
-Camera.fps: 30.0
+Camera.fps: 25.0
 
 # Color order of the images (0: BGR, 1: RGB. It is ignored if images are grayscale)
 Camera.RGB: 1
@@ -48,7 +48,7 @@ ORBextractor.minThFAST: 7
 Viewer.KeyFrameSize: 0.05
 Viewer.KeyFrameLineWidth: 1
 Viewer.GraphLineWidth: 0.9
-Viewer.PointSize:2
+Viewer.PointSize: 2
 Viewer.CameraSize: 0.08
 Viewer.CameraLineWidth: 3
 Viewer.ViewpointX: 0

@@ -32,6 +32,7 @@
 #include "tf/transform_datatypes.h"
 #include <tf/transform_broadcaster.h>
 #include <nav_msgs/Odometry.h>
+#include <sensor_msgs/CompressedImage.h>
 
 #include<opencv2/core/core.hpp>
 
@@ -44,7 +45,7 @@ class ImageGrabber
 public:
     ImageGrabber(ORB_SLAM2::System* pSLAM):mpSLAM(pSLAM){}
 
-    void GrabImage(const sensor_msgs::ImageConstPtr& msg);
+    void GrabImage(const sensor_msgs::CompressedImageConstPtr& msg);
 
     ORB_SLAM2::System* mpSLAM;
     ros::Publisher odom_pub;
@@ -69,7 +70,7 @@ int main(int argc, char **argv)
     ImageGrabber igb(&SLAM);
 
     ros::NodeHandle nodeHandler;
-    ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
+    ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw/compressed", 1, &ImageGrabber::GrabImage,&igb);
     igb.odom_pub = nodeHandler.advertise<nav_msgs::Odometry>("odom", 50);
 
     ros::spin();
@@ -85,14 +86,16 @@ int main(int argc, char **argv)
     return 0;
 }
 
-void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
+void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg)
 {
     ros::Time current_time = ros::Time::now();
     // Copy the ros image message to cv::Mat.
-    cv_bridge::CvImageConstPtr cv_ptr;
+    //cv_bridge::CvImageConstPtr cv_ptr;
+    cv::Mat cv_image;
     try
     {
-        cv_ptr = cv_bridge::toCvShare(msg);
+        //cv_ptr = cv_bridge::toCvShare(msg);
+        cv_image = cv::imdecode(cv::Mat(msg->data), CV_LOAD_IMAGE_UNCHANGED);
     }
     catch (cv_bridge::Exception& e)
     {
@@ -100,7 +103,7 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
         return;
     }
     
-    cv::Mat pose = mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
+    cv::Mat pose = mpSLAM->TrackMonocular(cv_image,msg->header.stamp.toSec());
 
     if (pose.empty())
         return;
