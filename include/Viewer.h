@@ -29,6 +29,9 @@
 
 #include <mutex>
 
+#include <iostream>
+#include <string>
+
 namespace ORB_SLAM2
 {
 
@@ -56,6 +59,8 @@ public:
 
     void Release();
 
+    float getScaleFactor();
+
 private:
 
     bool Stop();
@@ -80,6 +85,8 @@ private:
     bool mbStopped;
     bool mbStopRequested;
     std::mutex mMutexStop;
+
+    float scale_factor;
 
 };
 

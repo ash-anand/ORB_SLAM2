@@ -50,6 +50,12 @@ Viewer::Viewer(System* pSystem, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer
     mViewpointY = fSettings["Viewer.ViewpointY"];
     mViewpointZ = fSettings["Viewer.ViewpointZ"];
     mViewpointF = fSettings["Viewer.ViewpointF"];
+    scale_factor = 1.0;
+}
+
+float Viewer::getScaleFactor()
+{
+    return scale_factor;
 }
 
 void Viewer::Run()
@@ -72,6 +78,7 @@ void Viewer::Run()
     pangolin::Var<bool> menuShowGraph("menu.Show Graph",true,true);
     pangolin::Var<bool> menuLocalizationMode("menu.Localization Mode",false,true);
     pangolin::Var<bool> menuReset("menu.Reset",false,false);
+    pangolin::Var<float> menuScaleFactor ("menu.Scale", 1, 0, 100, false);  
 
     // Define Camera Render Object (for view / scene browsing)
     pangolin::OpenGlRenderState s_cam(
@@ -111,6 +118,11 @@ void Viewer::Run()
         else if(!menuFollowCamera && bFollow)
         {
             bFollow = false;
+        }
+
+        if (menuScaleFactor != scale_factor)
+        {
+            scale_factor = menuScaleFactor;
         }
 
         if(menuLocalizationMode && !bLocalizationMode)

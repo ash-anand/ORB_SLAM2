@@ -26,7 +26,6 @@
 
 #include<ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
-
 #include "geometry_msgs/TransformStamped.h"
 #include "../../../include/System.h"
 #include "tf/transform_datatypes.h"
@@ -50,6 +49,8 @@ public:
     ORB_SLAM2::System* mpSLAM;
     ros::Publisher odom_pub;
     tf::TransformBroadcaster br;
+
+    //float scale_factor;
 };
 
 int main(int argc, char **argv)
@@ -62,7 +63,7 @@ int main(int argc, char **argv)
         cerr << endl << "Usage: rosrun ORB_SLAM2 Mono path_to_vocabulary path_to_settings" << endl;        
         ros::shutdown();
         return 1;
-    }    
+    } 
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
@@ -108,6 +109,8 @@ void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg)
     if (pose.empty())
         return;
 
+    float scale_factor = mpSLAM->GetViewer()->getScaleFactor();
+
     /* global left handed coordinate system */
     static cv::Mat pose_prev = cv::Mat::eye(4,4, CV_32F);
     static cv::Mat world_lh = cv::Mat::eye(4,4, CV_32F);
@@ -149,9 +152,9 @@ void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg)
     geometry_msgs::Quaternion odom_quat = tf::createQuaternionMsgFromYaw(0);
 
     //set the position
-    odom.pose.pose.position.x = globalTranslation_rh[0];
-    odom.pose.pose.position.y = globalTranslation_rh[1];
-    odom.pose.pose.position.z = globalTranslation_rh[2];
+    odom.pose.pose.position.x = globalTranslation_rh[0] * scale_factor;
+    odom.pose.pose.position.y = globalTranslation_rh[1] * scale_factor;
+    odom.pose.pose.position.z = globalTranslation_rh[2] * scale_factor;
     odom.pose.pose.orientation = odom_quat;
 
     //set the velocity
