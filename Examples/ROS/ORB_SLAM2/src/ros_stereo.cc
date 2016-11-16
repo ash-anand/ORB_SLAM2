@@ -24,11 +24,16 @@
 #include<fstream>
 #include<chrono>
 
-#include<ros/ros.h>
+#include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
+#include <sensor_msgs/CompressedImage.h>
+#include <nav_msgs/Odometry.h>
+#include "tf/transform_datatypes.h"
+#include <tf/transform_broadcaster.h>
+#include <sensor_msgs/NavSatFix.h>
 
 #include<opencv2/core/core.hpp>
 
@@ -41,11 +46,13 @@ class ImageGrabber
 public:
     ImageGrabber(ORB_SLAM2::System* pSLAM):mpSLAM(pSLAM){}
 
-    void GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight);
-
+    void GrabStereo(const sensor_msgs::CompressedImageConstPtr& msgLeft,const sensor_msgs::CompressedImageConstPtr& msgRight);
     ORB_SLAM2::System* mpSLAM;
     bool do_rectify;
     cv::Mat M1l,M2l,M1r,M2r;
+    ros::Publisher odom_pub;
+    ros::Publisher odom_gps;
+    tf::TransformBroadcaster br;
 };
 
 int main(int argc, char **argv)
@@ -109,9 +116,12 @@ int main(int argc, char **argv)
 
     ros::NodeHandle nh;
 
-    message_filters::Subscriber<sensor_msgs::Image> left_sub(nh, "/camera/left/image_raw", 1);
-    message_filters::Subscriber<sensor_msgs::Image> right_sub(nh, "camera/right/image_raw", 1);
-    typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
+    igb.odom_pub = nh.advertise<nav_msgs::Odometry>("orbslam/odom", 50);
+    igb.odom_gps = nh.advertise<sensor_msgs::NavSatFix>("orbslam/gps", 50);
+
+    message_filters::Subscriber<sensor_msgs::CompressedImage> left_sub(nh, "/camera/left/image_raw/compressed", 1);
+    message_filters::Subscriber<sensor_msgs::CompressedImage> right_sub(nh, "/camera/right/image_raw/compressed", 1);
+    typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::CompressedImage, sensor_msgs::CompressedImage> sync_pol;
     message_filters::Synchronizer<sync_pol> sync(sync_pol(10), left_sub,right_sub);
     sync.registerCallback(boost::bind(&ImageGrabber::GrabStereo,&igb,_1,_2));
 
@@ -130,13 +140,16 @@ int main(int argc, char **argv)
     return 0;
 }
 
-void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const sensor_msgs::ImageConstPtr& msgRight)
+void ImageGrabber::GrabStereo(const sensor_msgs::CompressedImageConstPtr& msgLeft,const sensor_msgs::CompressedImageConstPtr& msgRight)
 {
+    ros::Time current_time = ros::Time::now();
     // Copy the ros image message to cv::Mat.
-    cv_bridge::CvImageConstPtr cv_ptrLeft;
+    //cv_bridge::CvImageConstPtr cv_ptrLeft;
+    cv::Mat cv_imageLeft;
     try
     {
-        cv_ptrLeft = cv_bridge::toCvShare(msgLeft);
+        //cv_ptrLeft = cv_bridge::toCvShare(msgLeft);
+        cv_imageLeft = cv::imdecode(cv::Mat(msgLeft->data), CV_LOAD_IMAGE_UNCHANGED);
     }
     catch (cv_bridge::Exception& e)
     {
@@ -144,27 +157,104 @@ void ImageGrabber::GrabStereo(const sensor_msgs::ImageConstPtr& msgLeft,const se
         return;
     }
 
-    cv_bridge::CvImageConstPtr cv_ptrRight;
+    //cv_bridge::CvImageConstPtr cv_ptrRight;
+    cv::Mat cv_imageRight;
     try
     {
-        cv_ptrRight = cv_bridge::toCvShare(msgRight);
+        //cv_ptrRight = cv_bridge::toCvShare(msgRight);
+        cv_imageRight = cv::imdecode(cv::Mat(msgRight->data), CV_LOAD_IMAGE_UNCHANGED);
     }
     catch (cv_bridge::Exception& e)
     {
         ROS_ERROR("cv_bridge exception: %s", e.what());
         return;
     }
-
+    //cout<<"hi"<<endl;
     if(do_rectify)
     {
         cv::Mat imLeft, imRight;
-        cv::remap(cv_ptrLeft->image,imLeft,M1l,M2l,cv::INTER_LINEAR);
-        cv::remap(cv_ptrRight->image,imRight,M1r,M2r,cv::INTER_LINEAR);
-        mpSLAM->TrackStereo(imLeft,imRight,cv_ptrLeft->header.stamp.toSec());
+        cv::Mat resizeLeft, resizeRight;
+        cv::resize(cv_imageLeft,resizeLeft,cv::Size(320,180));
+        cv::resize(cv_imageRight,resizeRight,cv::Size(320,180));
+        cv::remap(resizeLeft,imLeft,M1l,M2l,cv::INTER_LINEAR);
+        cv::remap(resizeRight,imRight,M1r,M2r,cv::INTER_LINEAR);
+        cv::Mat pose = mpSLAM->TrackStereo(imLeft,imRight,msgLeft->header.stamp.toSec());
+        
+        if (pose.empty())
+        return;
+
+        /* global left handed coordinate system */
+        static cv::Mat pose_prev = cv::Mat::eye(4,4, CV_32F);
+        static cv::Mat world_lh = cv::Mat::eye(4,4, CV_32F);
+        // matrix to flip signs of sinus in rotation matrix, not sure why we need to do that
+        static const cv::Mat flipSign = (cv::Mat_<float>(4,4) <<   1,-1,-1, 1,
+                                                                   -1, 1,-1, 1,
+                                                                   -1,-1, 1, 1,
+                                                                    1, 1, 1, 1);
+
+        //prev_pose * T = pose
+        cv::Mat translation =  (pose * pose_prev.inv()).mul(flipSign);
+        world_lh = world_lh * translation;
+        pose_prev = pose.clone();
+
+
+        /* transform into global right handed coordinate system, publish in ROS*/
+        tf::Matrix3x3 cameraRotation_rh(  - world_lh.at<float>(0,0),   world_lh.at<float>(0,1),   world_lh.at<float>(0,2),
+                                      - world_lh.at<float>(1,0),   world_lh.at<float>(1,1),   world_lh.at<float>(1,2),
+                                        world_lh.at<float>(2,0), - world_lh.at<float>(2,1), - world_lh.at<float>(2,2));
+
+        tf::Vector3 cameraTranslation_rh( world_lh.at<float>(0,3),world_lh.at<float>(1,3), - world_lh.at<float>(2,3) );
+
+        //rotate 270deg about x and 270deg about x to get ENU: x forward, y left, z up
+        const tf::Matrix3x3 rotation270degXZ(   0, 1, 0,
+                                                0, 0, 1,
+                                                1, 0, 0);
+
+
+        //tf::Matrix3x3 globalRotation_rh = cameraRotation_rh * rotation270degXZ;
+        tf::Vector3 globalTranslation_rh = cameraTranslation_rh * rotation270degXZ;
+        //tf::Transform transform = tf::Transform(globalRotation_rh, globalTranslation_rh);
+        //br.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "camera_link", "camera_pose"));
+
+        //publish odometry
+        nav_msgs::Odometry odom;
+        odom.header.stamp = current_time;
+        odom.header.frame_id = "odom";
+
+        geometry_msgs::Quaternion odom_quat = tf::createQuaternionMsgFromYaw(0);
+
+        //set the position
+        odom.pose.pose.position.x = globalTranslation_rh[0];
+        odom.pose.pose.position.y = globalTranslation_rh[1];
+        odom.pose.pose.position.z = 0.5;
+        odom.pose.pose.orientation = odom_quat;
+
+        //set the velocity
+        odom.child_frame_id = "base_link";
+        odom.twist.twist.linear.x = 0;
+        odom.twist.twist.linear.y = 0;
+        odom.twist.twist.angular.z = 0;
+
+        //publish the message
+        odom_pub.publish(odom);
+
+        sensor_msgs::NavSatFix gps_msg;
+        gps_msg.header.stamp = current_time;
+        gps_msg.header.frame_id = "orb_gps";
+        gps_msg.status.status = 0;
+        gps_msg.status.service = 1;
+        float pi = 3.14;
+        gps_msg.latitude = 22.3191537 + (180/pi)*(odom.pose.pose.position.y/6378.137);
+        gps_msg.longitude = 87.3027312 + (180/pi)*(odom.pose.pose.position.x/6378.137)/cos(22.3191537);
+        gps_msg.altitude = 47.89;
+        gps_msg.position_covariance = {3.0276000331878663, 0.0, 0.0, 0.0, 3.0276000331878663, 0.0, 0.0, 0.0, 12.110400132751465};
+        gps_msg.position_covariance_type = 1;
+        odom_gps.publish(gps_msg);
+
     }
     else
     {
-        mpSLAM->TrackStereo(cv_ptrLeft->image,cv_ptrRight->image,cv_ptrLeft->header.stamp.toSec());
+         mpSLAM->TrackStereo(cv_imageLeft,cv_imageRight,msgLeft->header.stamp.toSec());
     }
 
 }
